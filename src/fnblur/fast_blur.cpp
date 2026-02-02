@@ -450,14 +450,15 @@ void blur_horizontal_range_neon(const unsigned char *src, unsigned char *dst,
   int stride = width * channels;
   int radius = 5;
 
-  // Constants for kernel 11 weights: [1, 4, 12, 26, 48, 74, 48, 26, 12, 4, 1]
-  uint16x8_t k4 = vdupq_n_u16(4);
-  uint16x8_t k12 = vdupq_n_u16(12);
+  // Constants for kernel 11 weights (Target Sigma ~2.0):
+  // [1, 3, 8, 16, 23, 26, 23, 16, 8, 3, 1] -> Sum 128
+  uint16x8_t k3 = vdupq_n_u16(3);
+  uint16x8_t k8 = vdupq_n_u16(8);
+  uint16x8_t k16 = vdupq_n_u16(16);
+  uint16x8_t k23 = vdupq_n_u16(23);
   uint16x8_t k26 = vdupq_n_u16(26);
-  uint16x8_t k48 = vdupq_n_u16(48);
-  uint16x8_t k74 = vdupq_n_u16(74);
-  // Use 128 for rounding, bitshift 8
-  uint16x8_t kRound = vdupq_n_u16(128);
+  // Use 64 for rounding, bitshift 7
+  uint16x8_t kRound = vdupq_n_u16(64);
 
   // Iterate over the vertical range provided (Y axis)
   for (int y = y_start; y < y_end; ++y) {
@@ -510,10 +511,10 @@ void blur_horizontal_range_neon(const unsigned char *src, unsigned char *dst,
         uint8x16_t p_left = vld1q_u8(src_row + idx - 16);
         uint16x8_t p_right = vld1q_u8(src_row + idx + 16);
 
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k4);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k4);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k4);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k4);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k3);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k3);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k3);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k3);
       }
 
       {
@@ -521,10 +522,10 @@ void blur_horizontal_range_neon(const unsigned char *src, unsigned char *dst,
         uint8x16_t p_left = vld1q_u8(src_row + idx - 12);
         uint16x8_t p_right = vld1q_u8(src_row + idx + 12);
 
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k12);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k12);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k12);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k12);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k8);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k8);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k8);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k8);
       }
 
       {
@@ -532,10 +533,10 @@ void blur_horizontal_range_neon(const unsigned char *src, unsigned char *dst,
         uint8x16_t p_left = vld1q_u8(src_row + idx - 8);
         uint16x8_t p_right = vld1q_u8(src_row + idx + 8);
 
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k26);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k26);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k26);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k26);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k16);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k16);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k16);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k16);
       }
 
       {
@@ -543,22 +544,22 @@ void blur_horizontal_range_neon(const unsigned char *src, unsigned char *dst,
         uint8x16_t p_left = vld1q_u8(src_row + idx - 4);
         uint16x8_t p_right = vld1q_u8(src_row + idx + 4);
 
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k48);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k48);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k48);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k48);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k23);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k23);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k23);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k23);
       }
 
       {
         // idx - 0*4 = idx
         uint8x16_t p_center = vld1q_u8(src_row + idx);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_center)), k74);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_center)), k74);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_center)), k26);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_center)), k26);
       }
 
-      // Normalize by dividing by 256 (shift right by 8)
-      sum_L = vshrq_n_u16(sum_L, 8);
-      sum_H = vshrq_n_u16(sum_H, 8);
+      // Normalize by dividing by 128 (shift right by 7)
+      sum_L = vshrq_n_u16(sum_L, 7);
+      sum_H = vshrq_n_u16(sum_H, 7);
 
       vst1q_u8(dst_row + idx,
                vcombine_u8(vqmovn_u16(sum_L), vqmovn_u16(sum_H)));
@@ -568,14 +569,14 @@ void blur_horizontal_range_neon(const unsigned char *src, unsigned char *dst,
     for (int x = vec_limit; x < x_end; ++x) {
       int idx = x * channels;
       for (int c = 0; c < channels; ++c) {
-        uint32_t sum = 128;                                          // Rounding
-        sum += 1 * (src_row[idx - 20 + c] + src_row[idx + 20 + c]);  // x-5, x+5
-        sum += 4 * (src_row[idx - 16 + c] + src_row[idx + 16 + c]);  // x-4, x+4
-        sum += 12 * (src_row[idx - 12 + c] + src_row[idx + 12 + c]); // x-3, x+3
-        sum += 26 * (src_row[idx - 8 + c] + src_row[idx + 8 + c]);   // x-2, x+2
-        sum += 48 * (src_row[idx - 4 + c] + src_row[idx + 4 + c]);   // x-1, x+1
-        sum += 74 * src_row[idx + c];                                // x
-        dst_row[idx + c] = (unsigned char)(sum >> 8);
+        uint32_t sum = 64;                                          // Rounding
+        sum += 1 * (src_row[idx - 20 + c] + src_row[idx + 20 + c]); // x-5, x+5
+        sum += 3 * (src_row[idx - 16 + c] + src_row[idx + 16 + c]); // x-4, x+4
+        sum += 8 * (src_row[idx - 12 + c] + src_row[idx + 12 + c]); // x-3, x+3
+        sum += 16 * (src_row[idx - 8 + c] + src_row[idx + 8 + c]);  // x-2, x+2
+        sum += 23 * (src_row[idx - 4 + c] + src_row[idx + 4 + c]);  // x-1, x+1
+        sum += 26 * src_row[idx + c];                               // x
+        dst_row[idx + c] = (unsigned char)(sum >> 7);
       }
     }
   }
@@ -587,14 +588,15 @@ void blur_vertical_range_row_neon(const unsigned char *src, unsigned char *dst,
   int stride = width * channels;
   int radius = 5;
 
-  // Constants for kernel 11 weights: [1, 4, 12, 26, 48, 74, 48, 26, 12, 4, 1]
-  uint16x8_t k4 = vdupq_n_u16(4);
-  uint16x8_t k12 = vdupq_n_u16(12);
+  // Constants for kernel 11 weights (Target Sigma ~2.0):
+  // [1, 3, 8, 16, 23, 26, 23, 16, 8, 3, 1] -> Sum 128
+  uint16x8_t k3 = vdupq_n_u16(3);
+  uint16x8_t k8 = vdupq_n_u16(8);
+  uint16x8_t k16 = vdupq_n_u16(16);
+  uint16x8_t k23 = vdupq_n_u16(23);
   uint16x8_t k26 = vdupq_n_u16(26);
-  uint16x8_t k48 = vdupq_n_u16(48);
-  uint16x8_t k74 = vdupq_n_u16(74);
-  // Use 128 for rounding, bitshift 8
-  uint16x8_t kRound = vdupq_n_u16(128);
+  // Use 64 for rounding, bitshift 7
+  uint16x8_t kRound = vdupq_n_u16(64);
 
   // Safe boundaries
   int safe_start = std::max(radius, y_start);
@@ -627,79 +629,79 @@ void blur_vertical_range_row_neon(const unsigned char *src, unsigned char *dst,
       }
 
       {
-        // (y - 4, y + 4) - Weight: 4
+        // (y - 4, y + 4) - Weight: 3
         uint8x16_t p_left = vld1q_u8(src_ptrs[1] + x);
         uint8x16_t p_right = vld1q_u8(src_ptrs[9] + x);
 
         // Addition
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k4);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k4);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k4);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k4);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k3);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k3);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k3);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k3);
       }
 
       {
-        // (y - 3, y + 3) - Weight: 12
+        // (y - 3, y + 3) - Weight: 8
         uint8x16_t p_left = vld1q_u8(src_ptrs[2] + x);
         uint8x16_t p_right = vld1q_u8(src_ptrs[8] + x);
 
         // Addition
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k12);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k12);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k12);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k12);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k8);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k8);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k8);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k8);
       }
 
       {
-        // (y - 2, y + 2) - Weight: 26
+        // (y - 2, y + 2) - Weight: 16
         uint8x16_t p_left = vld1q_u8(src_ptrs[3] + x);
         uint8x16_t p_right = vld1q_u8(src_ptrs[7] + x);
 
         // Addition
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k26);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k26);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k26);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k26);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k16);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k16);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k16);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k16);
       }
 
       {
-        // (y - 1, y + 1) - Weight: 48
+        // (y - 1, y + 1) - Weight: 23
         uint8x16_t p_left = vld1q_u8(src_ptrs[4] + x);
         uint8x16_t p_right = vld1q_u8(src_ptrs[6] + x);
 
         // Addition
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k48);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k48);
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k48);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k48);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_left)), k23);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_left)), k23);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_right)), k23);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_right)), k23);
       }
 
       {
-        // (y) - Weight: 74
+        // (y) - Weight: 26
         uint8x16_t p_center = vld1q_u8(src_ptrs[5] + x);
 
         // Addition
-        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_center)), k74);
-        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_center)), k74);
+        sum_L = vmlaq_u16(sum_L, vmovl_u8(vget_low_u8(p_center)), k26);
+        sum_H = vmlaq_u16(sum_H, vmovl_u8(vget_high_u8(p_center)), k26);
       }
 
-      sum_L = vshrq_n_u16(sum_L, 8);
-      sum_H = vshrq_n_u16(sum_H, 8);
+      sum_L = vshrq_n_u16(sum_L, 7);
+      sum_H = vshrq_n_u16(sum_H, 7);
 
       vst1q_u8(dst_row + x, vcombine_u8(vqmovn_u16(sum_L), vqmovn_u16(sum_H)));
     }
 
     // Leftover pixels
     for (; x < stride; x++) {
-      uint32_t sum = 128; // Rounding
+      uint32_t sum = 64; // Rounding
 
       sum += 1 * (src_ptrs[0][x] + src_ptrs[10][x]);
-      sum += 4 * (src_ptrs[1][x] + src_ptrs[9][x]);
-      sum += 12 * (src_ptrs[2][x] + src_ptrs[8][x]);
-      sum += 26 * (src_ptrs[3][x] + src_ptrs[7][x]);
-      sum += 48 * (src_ptrs[4][x] + src_ptrs[6][x]);
-      sum += 74 * src_ptrs[5][x];
-      dst_row[x] = (unsigned char)(sum >> 8);
+      sum += 3 * (src_ptrs[1][x] + src_ptrs[9][x]);
+      sum += 8 * (src_ptrs[2][x] + src_ptrs[8][x]);
+      sum += 16 * (src_ptrs[3][x] + src_ptrs[7][x]);
+      sum += 23 * (src_ptrs[4][x] + src_ptrs[6][x]);
+      sum += 26 * src_ptrs[5][x];
+      dst_row[x] = (unsigned char)(sum >> 7);
     }
   }
 }
