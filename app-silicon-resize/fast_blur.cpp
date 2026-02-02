@@ -138,6 +138,61 @@ void blend_mask_neon_range(const unsigned char *src, const unsigned char *blur,
   }
 }
 
+// Mixes using the Alpha channel of the source image as the mask.
+// Source: RGBA. Alpha channel (A) is treated as the mask.
+// Formula: OutputRGB = (SourceRGB * (255 - A) + BlurRGB * A) >> 8
+void blend_using_alpha_neon(const unsigned char *src, const unsigned char *blur,
+                            unsigned char *dst, int num_pixels) {
+  int i = 0;
+
+  for (; i <= num_pixels - 16; i += 16) {
+    uint8x16x4_t v_src = vld4q_u8(src + i * 4);
+    uint8x16x4_t v_blur = vld4q_u8(blur + i * 4);
+
+    // Use Source Alpha as Mask
+    uint8x16_t v_mask = v_src.val[3];
+    uint8x16_t v_inv_mask = vmvnq_u8(v_mask);
+
+    uint16x8_t m_lo = vmovl_u8(vget_low_u8(v_mask));
+    uint16x8_t m_hi = vmovl_u8(vget_high_u8(v_mask));
+    uint16x8_t im_lo = vmovl_u8(vget_low_u8(v_inv_mask));
+    uint16x8_t im_hi = vmovl_u8(vget_high_u8(v_inv_mask));
+
+    uint8x16x4_t v_dst;
+
+    for (int c = 0; c < 3; ++c) {
+      uint16x8_t s_lo = vmovl_u8(vget_low_u8(v_src.val[c]));
+      uint16x8_t s_hi = vmovl_u8(vget_high_u8(v_src.val[c]));
+      uint16x8_t b_lo = vmovl_u8(vget_low_u8(v_blur.val[c]));
+      uint16x8_t b_hi = vmovl_u8(vget_high_u8(v_blur.val[c]));
+
+      uint16x8_t res_lo = vmlaq_u16(vmulq_u16(s_lo, im_lo), b_lo, m_lo);
+      uint16x8_t res_hi = vmlaq_u16(vmulq_u16(s_hi, im_hi), b_hi, m_hi);
+
+      v_dst.val[c] =
+          vcombine_u8(vrshrn_n_u16(res_lo, 8), vrshrn_n_u16(res_hi, 8));
+    }
+
+    // Preserve Alpha
+    v_dst.val[3] = v_src.val[3];
+
+    vst4q_u8(dst + i * 4, v_dst);
+  }
+
+  // Scalar fallback (tail)
+  for (; i < num_pixels; ++i) {
+    int idx = i * 4;
+    int m = src[idx + 3]; // Alpha is mask
+    int inv_m = 255 - m;
+
+    for (int c = 0; c < 3; ++c) {
+      dst[idx + c] =
+          (unsigned char)((src[idx + c] * inv_m + blur[idx + c] * m) >> 8);
+    }
+    dst[idx + 3] = src[idx + 3];
+  }
+}
+
 __attribute((noinline)) void
 process_blur_simd_vertical_range(const unsigned char *src, unsigned char *dst,
                                  int width, int height, int channels,
@@ -673,6 +728,68 @@ void process_blur_gaussian(const unsigned char *src, unsigned char *dst,
   }
 }
 
+// --- BOX BLUR MULTI-THREADED ---
+void process_blur_box_multithreaded(const unsigned char *src,
+                                    unsigned char *dst, int width, int height,
+                                    int channels, int iterations,
+                                    int num_threads = -1) {
+  int stride = width * channels;
+  if (iterations <= 0) {
+    std::memcpy(dst, src, stride * height);
+    return;
+  }
+
+  // Create temp buffer
+  std::vector<unsigned char> temp(width * height * channels);
+  if (num_threads == -1) {
+    num_threads = std::thread::hardware_concurrency();
+  }
+
+  num_threads = std::min(num_threads, height);
+  if (num_threads < 1) {
+    num_threads = 1;
+  }
+
+  int rows_per_thread = height / num_threads;
+  std::vector<std::thread> threads;
+  threads.reserve(num_threads);
+
+  for (int i = 0; i < iterations; ++i) {
+    // Ping-pong
+    const unsigned char *current_input = (i == 0) ? src : dst;
+
+    // Vertical Pass
+    for (int t = 0; t < num_threads; ++t) {
+      int y_start = t * rows_per_thread;
+      int y_end = (t == num_threads - 1) ? height : y_start + rows_per_thread;
+
+      threads.emplace_back([=, &temp]() {
+        process_blur_simd_vertical_range(current_input, temp.data(), width,
+                                         height, channels, y_start, y_end);
+      });
+    }
+
+    for (auto &t : threads)
+      t.join();
+    threads.clear();
+
+    // Horizontal Pass
+    for (int t = 0; t < num_threads; ++t) {
+      int y_start = t * rows_per_thread;
+      int y_end = (t == num_threads - 1) ? height : y_start + rows_per_thread;
+
+      threads.emplace_back([=, &temp]() {
+        process_blur_simd_horizontal_range(temp.data(), dst, width, height,
+                                           channels, y_start, y_end);
+      });
+    }
+
+    for (auto &t : threads)
+      t.join();
+    threads.clear();
+  }
+}
+
 // Simple Box-Blur SIMD implementation
 // Kernel size is 5x5
 py::array_t<uint8_t> blur_image(py::array_t<uint8_t> input_array,
@@ -691,17 +808,19 @@ py::array_t<uint8_t> blur_image(py::array_t<uint8_t> input_array,
   auto ptr = static_cast<uint8_t *>(buf_info.ptr);
   // Copy data to local buffer for thread safety
   std::vector<uint8_t> working_buffer(ptr, ptr + size);
+  std::vector<uint8_t> dst_buffer(size);
 
   {
     py::gil_scoped_release release;
-    process_blur_simd(working_buffer.data(), working_buffer.data(), width,
-                      height, channels, iterations);
+    process_blur_box_multithreaded(working_buffer.data(), dst_buffer.data(),
+                                   width, height, channels, iterations,
+                                   threads);
   }
 
   auto result = py::array_t<uint8_t>({height, width, channels});
   py::buffer_info res_info = result.request();
 
-  std::memcpy(res_info.ptr, working_buffer.data(), size);
+  std::memcpy(res_info.ptr, dst_buffer.data(), size);
 
   return result;
 }
@@ -783,18 +902,89 @@ py::array_t<uint8_t> blur_with_mask(py::array_t<uint8_t> img_arr,
   return result;
 }
 
+py::array_t<uint8_t> blur_gaussian_alpha_mask(py::array_t<uint8_t> img_arr,
+                                              int iterations,
+                                              int threads = -1) {
+  auto img_buf = img_arr.request();
+  if (img_buf.ndim != 3 || img_buf.shape[2] != 4)
+    throw std::runtime_error("Image must be RGBA!");
+
+  int h = img_buf.shape[0];
+  int w = img_buf.shape[1];
+  size_t img_size = w * h * 4;
+  uint8_t *img_ptr = static_cast<uint8_t *>(img_buf.ptr);
+
+  // We must copy because we process in place and we need both src and
+  // blurred for blending
+  std::vector<uint8_t> src(img_ptr, img_ptr + img_size);
+  std::vector<uint8_t> blurred(img_size);
+  std::vector<uint8_t> final_dst(img_size);
+
+  {
+    py::gil_scoped_release release;
+    // Blur entire image
+    process_blur_gaussian(src.data(), blurred.data(), w, h, 4, iterations,
+                          threads);
+    // Blend using Alpha
+    blend_using_alpha_neon(src.data(), blurred.data(), final_dst.data(), w * h);
+  }
+
+  auto result = py::array_t<uint8_t>({h, w, 4});
+  std::memcpy(result.request().ptr, final_dst.data(), img_size);
+  return result;
+}
+
 PYBIND11_MODULE(fast_blur_neon, m) {
-  m.doc() = "Ultra-fast Box Blur using NEON for Apple Silicon";
+  m.doc() = "Ultra-fast Image Blurring using NEON for ARMv8 processors";
 
-  m.def("blur", &blur_image, "Blur RGBA image", py::arg("image"),
-        py::arg("iterations") = 1, py::arg("threads") = -1);
+  m.def("box", &blur_image,
+        R"pbdoc(
+        Apply standard Box Blur. Fastest option.
 
-  m.def("blur_gaussian", &blur_gaussian,
-        "Gaussian Blur (11-tap weighted) RGBA image", py::arg("image"),
-        py::arg("iterations") = 1, py::arg("threads") = -1);
+        Args:
+            image (RGBA): Input image.
+            iterations (int): Blur intensity (passes).
+            threads (int): -1 for auto.
+        )pbdoc",
+        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1);
 
-  m.def("blur_with_mask", &blur_with_mask,
-        "Gaussian Blur (11-tap weighted) RGBA image using a grayscale mask",
+  m.def("gaussian", &blur_gaussian,
+        R"pbdoc(
+        Apply Gaussian Blur (11-tap kernel). Smoother/Creamier look.
+
+        Args:
+            image (RGBA): Input image.
+            iterations (int): Blur intensity.
+            threads (int): -1 for auto.
+        )pbdoc",
+        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1);
+
+  m.def("masked", &blur_with_mask,
+        R"pbdoc(
+        Gaussian Blur applied only where the Mask is white (255).
+
+        Args:
+            image (RGBA): Input image.
+            mask (Grayscale): Blending mask (same WxH).
+            iterations (int): Blur intensity.
+            threads (int): -1 for auto.
+        )pbdoc",
         py::arg("image"), py::arg("mask"), py::arg("iterations") = 1,
         py::arg("threads") = -1);
+
+  m.def("alpha", &blur_gaussian_alpha_mask,
+        R"pbdoc(
+        Smart Blur: Uses the image's own Alpha channel as the mask.
+        Alpha 0   = Sharp (Original).
+        Alpha 255 = Blurred.
+
+        Args:
+            image (RGBA): Input image with mask in Alpha channel.
+            iterations (int): Blur intensity.
+            threads (int): -1 for auto.
+
+        Returns:
+            numpy.ndarray: Blended image (H, W, 4) with preserved Alpha.
+        )pbdoc",
+        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1);
 }
