@@ -1,0 +1,7 @@
+CompileFlags:
+  Add:
+    - -I/opt/homebrew/Caskroom/miniforge/base/include/python3.12
+    - -I/opt/homebrew/Caskroom/miniforge/base/lib/python3.12/site-packages/pybind11/include
+    - -std=c++17
+    - -Wall
+    - -O3

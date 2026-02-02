@@ -3,10 +3,49 @@
 #include <cstring>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <sys/resource.h>
 #include <thread>
 #include <vector>
 
 namespace py = pybind11;
+
+int get_optimal_thread_count(int width, int height, int requested_threads,
+                             int max_threads) {
+  if (requested_threads > 0) {
+    return requested_threads;
+  }
+
+  size_t total_pixels = (size_t)width * height;
+
+  // Hardware core count
+  int hardware_threads = std::thread::hardware_concurrency();
+
+  // If the system could not provide the core count, default to 4 threads
+  if (hardware_threads == 0) {
+    hardware_threads = 4;
+  }
+
+  // Use the minimum of the hardware threads and the max_threads
+  int limit = hardware_threads;
+  // Update limit to user-specified max_threads if provided
+  if (max_threads > 0) {
+    limit = std::min(max_threads, hardware_threads);
+  }
+
+  // For small images, below 800x600, it is not worth parallelizing
+  if (total_pixels < 500000) {
+    return 1;
+  }
+
+  // For medium images, below 2MP, use 4 threads
+  // 4 threads are enough to saturate the memory bandwidth.
+  if (total_pixels < 2000000) {
+    return std::min(4, limit);
+  }
+
+  // For large images, 4K+, use all available cores
+  return limit;
+}
 
 // Optimized division by 3 using 16-bit "Doubling High Multiply".
 // Accuracy matches the slower 32-bit vmull version (21846 multiplier),
@@ -667,17 +706,16 @@ void blur_vertical_range_row_neon(const unsigned char *src, unsigned char *dst,
 
 void process_blur_gaussian(const unsigned char *src, unsigned char *dst,
                            int width, int height, int channels, int iterations,
-                           int num_threads = -1) {
+                           int num_threads, int max_threads) {
   // Create temp buffer for horizontal pass
   std::vector<unsigned char> temp(width * height * channels);
   int stride = width * channels;
 
-  // Horizontal pass
-  if (num_threads == -1) {
-    num_threads = std::thread::hardware_concurrency();
-  }
+  num_threads =
+      get_optimal_thread_count(width, height, num_threads, max_threads);
   int rows_per_thread = height / num_threads;
 
+  // Horizontal pass
   for (int i = 0; i < iterations; ++i) {
     const unsigned char *current_input = (i == 0) ? src : dst;
     std::vector<std::thread> threads;
@@ -732,7 +770,8 @@ void process_blur_gaussian(const unsigned char *src, unsigned char *dst,
 void process_blur_box_multithreaded(const unsigned char *src,
                                     unsigned char *dst, int width, int height,
                                     int channels, int iterations,
-                                    int num_threads = -1) {
+                                    int num_threads = -1,
+                                    int max_threads = -1) {
   int stride = width * channels;
   if (iterations <= 0) {
     std::memcpy(dst, src, stride * height);
@@ -741,15 +780,9 @@ void process_blur_box_multithreaded(const unsigned char *src,
 
   // Create temp buffer
   std::vector<unsigned char> temp(width * height * channels);
-  if (num_threads == -1) {
-    num_threads = std::thread::hardware_concurrency();
-  }
 
-  num_threads = std::min(num_threads, height);
-  if (num_threads < 1) {
-    num_threads = 1;
-  }
-
+  num_threads =
+      get_optimal_thread_count(width, height, num_threads, max_threads);
   int rows_per_thread = height / num_threads;
   std::vector<std::thread> threads;
   threads.reserve(num_threads);
@@ -793,7 +826,8 @@ void process_blur_box_multithreaded(const unsigned char *src,
 // Simple Box-Blur SIMD implementation
 // Kernel size is 5x5
 py::array_t<uint8_t> blur_image(py::array_t<uint8_t> input_array,
-                                int iterations, int threads = -1) {
+                                int iterations, int threads = -1,
+                                int max_threads = -1) {
   py::buffer_info buf_info = input_array.request();
 
   if (buf_info.ndim != 3 || buf_info.shape[2] != 4) {
@@ -813,8 +847,8 @@ py::array_t<uint8_t> blur_image(py::array_t<uint8_t> input_array,
   {
     py::gil_scoped_release release;
     process_blur_box_multithreaded(working_buffer.data(), dst_buffer.data(),
-                                   width, height, channels, iterations,
-                                   threads);
+                                   width, height, channels, iterations, threads,
+                                   max_threads);
   }
 
   auto result = py::array_t<uint8_t>({height, width, channels});
@@ -828,11 +862,14 @@ py::array_t<uint8_t> blur_image(py::array_t<uint8_t> input_array,
 // Gaussian Blur using SIMD implementation
 // Kernel size is 11x11
 py::array_t<uint8_t> blur_gaussian(py::array_t<uint8_t> input_array,
-                                   int iterations, int threads = -1) {
+                                   int iterations, int threads = -1,
+                                   int max_threads = -1) {
   py::buffer_info buf_info = input_array.request();
 
   if (buf_info.ndim != 3 || buf_info.shape[2] != 4) {
-    throw std::runtime_error("The image must be in RGBA (4-channel) format!");
+    throw std::runtime_error(
+        "The image must be in RGBA (4-channel) format! Current is " +
+        std::to_string(buf_info.shape[2]) + "-channel");
   }
 
   int height = buf_info.shape[0];
@@ -848,7 +885,7 @@ py::array_t<uint8_t> blur_gaussian(py::array_t<uint8_t> input_array,
   {
     py::gil_scoped_release release;
     process_blur_gaussian(working_buffer.data(), dst_buffer.data(), width,
-                          height, channels, iterations, threads);
+                          height, channels, iterations, threads, max_threads);
   }
 
   auto result = py::array_t<uint8_t>({height, width, channels});
@@ -864,7 +901,8 @@ py::array_t<uint8_t> blur_gaussian(py::array_t<uint8_t> input_array,
 // original image
 py::array_t<uint8_t> blur_with_mask(py::array_t<uint8_t> img_arr,
                                     py::array_t<uint8_t> mask_arr,
-                                    int iterations, int threads = -1) {
+                                    int iterations, int threads = -1,
+                                    int max_threads = -1) {
   auto img_buf = img_arr.request();
   auto mask_buf = mask_arr.request();
 
@@ -890,7 +928,7 @@ py::array_t<uint8_t> blur_with_mask(py::array_t<uint8_t> img_arr,
 
     // Perform Gaussian Blur on the whole image
     process_blur_gaussian(src.data(), blurred.data(), w, h, 4, iterations,
-                          threads);
+                          threads, max_threads);
 
     // Blend original + Blurred using the mask
     blend_mask_neon_range(src.data(), blurred.data(), mask.data(),
@@ -903,8 +941,8 @@ py::array_t<uint8_t> blur_with_mask(py::array_t<uint8_t> img_arr,
 }
 
 py::array_t<uint8_t> blur_gaussian_alpha_mask(py::array_t<uint8_t> img_arr,
-                                              int iterations,
-                                              int threads = -1) {
+                                              int iterations, int threads = -1,
+                                              int max_threads = -1) {
   auto img_buf = img_arr.request();
   if (img_buf.ndim != 3 || img_buf.shape[2] != 4)
     throw std::runtime_error("Image must be RGBA!");
@@ -924,7 +962,7 @@ py::array_t<uint8_t> blur_gaussian_alpha_mask(py::array_t<uint8_t> img_arr,
     py::gil_scoped_release release;
     // Blur entire image
     process_blur_gaussian(src.data(), blurred.data(), w, h, 4, iterations,
-                          threads);
+                          threads, max_threads);
     // Blend using Alpha
     blend_using_alpha_neon(src.data(), blurred.data(), final_dst.data(), w * h);
   }
@@ -934,7 +972,7 @@ py::array_t<uint8_t> blur_gaussian_alpha_mask(py::array_t<uint8_t> img_arr,
   return result;
 }
 
-PYBIND11_MODULE(fast_blur_neon, m) {
+PYBIND11_MODULE(_fnblur, m) {
   m.doc() = "Ultra-fast Image Blurring using NEON for ARMv8 processors";
 
   m.def("box", &blur_image,
@@ -944,9 +982,11 @@ PYBIND11_MODULE(fast_blur_neon, m) {
         Args:
             image (RGBA): Input image.
             iterations (int): Blur intensity (passes).
-            threads (int): -1 for auto.
+            threads (int): -1 for auto. Uses all available cores.
+            max_threads (int): -1 for auto. Maximum number of threads to use.
         )pbdoc",
-        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1);
+        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1,
+        py::arg("max_threads") = -1);
 
   m.def("gaussian", &blur_gaussian,
         R"pbdoc(
@@ -955,9 +995,11 @@ PYBIND11_MODULE(fast_blur_neon, m) {
         Args:
             image (RGBA): Input image.
             iterations (int): Blur intensity.
-            threads (int): -1 for auto.
+            threads (int): -1 for auto. Uses all available cores.
+            max_threads (int): -1 for auto. Maximum number of threads to use.
         )pbdoc",
-        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1);
+        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1,
+        py::arg("max_threads") = -1);
 
   m.def("masked", &blur_with_mask,
         R"pbdoc(
@@ -967,10 +1009,11 @@ PYBIND11_MODULE(fast_blur_neon, m) {
             image (RGBA): Input image.
             mask (Grayscale): Blending mask (same WxH).
             iterations (int): Blur intensity.
-            threads (int): -1 for auto.
+            threads (int): -1 for auto. Uses all available cores.
+            max_threads (int): -1 for auto. Maximum number of threads to use.
         )pbdoc",
         py::arg("image"), py::arg("mask"), py::arg("iterations") = 1,
-        py::arg("threads") = -1);
+        py::arg("threads") = -1, py::arg("max_threads") = -1);
 
   m.def("alpha", &blur_gaussian_alpha_mask,
         R"pbdoc(
@@ -981,10 +1024,12 @@ PYBIND11_MODULE(fast_blur_neon, m) {
         Args:
             image (RGBA): Input image with mask in Alpha channel.
             iterations (int): Blur intensity.
-            threads (int): -1 for auto.
+            threads (int): -1 for auto. Uses all available cores.
+            max_threads (int): -1 for auto. Maximum number of threads to use.
 
         Returns:
             numpy.ndarray: Blended image (H, W, 4) with preserved Alpha.
         )pbdoc",
-        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1);
+        py::arg("image"), py::arg("iterations") = 1, py::arg("threads") = -1,
+        py::arg("max_threads") = -1);
 }

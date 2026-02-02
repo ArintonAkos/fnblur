@@ -2,6 +2,10 @@
 requires = ["setuptools>=42", "wheel", "pybind11>=2.10.0"]
 build-backend = "setuptools.build_meta"
 
+[project.optional-dependencies]
+test = ["pytest", "opencv-python", "pillow"]
+benchmark = ["opencv-python", "pillow"]
+
 [project]
 name = "fnblur"
 version = "0.1.0"

@@ -1,0 +1,5 @@
+build/
+fnblur.egg-info/
+__pycache__/
+*.so
+.pytest_cache/
