@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=42", "wheel", "pybind11>=2.10.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fnblur"
+version = "0.1.0"
+description = "Ultra-fast ARMv8 NEON Blur library"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+
+authors = [
+    {name = "Akos Arinton"} 
+]
+[project.urls]
+"Repository" = "https://github.com/ArintonAkos/fnblur"
+"LinkedIn" = "https://www.linkedin.com/in/arinton-akos/"
+"Issue Tracker" = "https://github.com/ArintonAkos/fnblur/issues"
