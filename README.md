@@ -97,13 +97,13 @@ The benchmarks were divided into two suites to highlight different performance c
 
 ## Comparison Guide
 
-| Feature              | fnblur                         | OpenCV                          | PyTorch                      |
-| :------------------- | :----------------------------- | :------------------------------ | :--------------------------- |
-| **Primary Use Case** | Real-time UI, Pre-processing   | General Computer Vision         | Deep Learning / Batched      |
-| **Hardware**         | Apple Silicon (CPU)            | Multi-Platform (CPU)            | NVIDIA/Apple (GPU)           |
-| **Architecture**     | Iterative Small Kernel (O(N))  | Single-Pass Large Kernel (O(1)) | FFT / Convolution            |
-| **Data Transfer**    | Zero-Copy (NumPy)              | Zero-Copy (NumPy)               | High Overhead (RAM <-> VRAM) |
-| **Best For...**      | **Low-latency, single images** | Large batch pipelines           | Massive parallel training    |
+| Feature              | fnblur                        | OpenCV                          | PyTorch                      |
+| :------------------- | :---------------------------- | :------------------------------ | :--------------------------- |
+| **Primary Use Case** | Real-time UI, Pre-processing  | General Computer Vision         | Deep Learning / Batched      |
+| **Hardware**         | **ARMv8 NEON (Apple/Linux)**  | Multi-Platform (CPU)            | NVIDIA/Apple (GPU)           |
+| **Architecture**     | Iterative Small Kernel (O(N)) | Single-Pass Large Kernel (O(1)) | FFT / Convolution            |
+| **Data Transfer**    | Zero-Copy (NumPy)             | Zero-Copy (NumPy)               | High Overhead (RAM <-> VRAM) |
+| **Best For...**      | **Low-latency on ARM CPUs**   | Large batch pipelines           | Massive parallel training    |
 
 ## Technical Details
 
