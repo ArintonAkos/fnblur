@@ -32,13 +32,21 @@ int get_optimal_thread_count(int width, int height, int requested_threads,
     limit = std::min(max_threads, hardware_threads);
   }
 
-  // For small images, below 800x600, it is not worth parallelizing
-  if (total_pixels < 500000) {
+  // For tiny images, below ~500x500 (250k pixels), strictly use 1 thread
+  // The overhead of creating threads outweighs the benefit.
+  if (total_pixels < 250000) {
     return 1;
   }
 
+  // For small images (up to ~1MP), use 2 threads.
+  // This helps beat OpenCV on 800x600 or 1024x768 resolutions.
+  if (total_pixels < 1000000) {
+    return std::min(2, limit);
+  }
+
   // For medium images, below 2MP, use 4 threads
-  // 4 threads are enough to saturate the memory bandwidth.
+  // 4 threads are usually enough to saturate the memory bandwidth for this
+  // size.
   if (total_pixels < 2000000) {
     return std::min(4, limit);
   }

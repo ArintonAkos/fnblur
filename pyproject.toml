@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 test = ["pytest", "opencv-python", "pillow"]
-benchmark = ["opencv-python", "pillow"]
+benchmark = ["opencv-python", "pillow", "matplotlib"]
 
 [project]
 name = "fnblur"
